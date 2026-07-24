@@ -128,16 +128,13 @@ where
     let total_steps = pipe.operators().len();
     let mut buffer = [0u8; 16384];
     let mut total_bytes_lidos: u64 = 0;
+    let emitter = ContextualEmitter {
+        step_index: 0,
+        total_steps,
+        media_id: &media_id,
+    };
 
-    // 1. Notifica o início das etapas na pipeline
-    for (idx, op) in pipe.operators().iter().enumerate() {
-        let emitter = ContextualEmitter {
-            step_index: idx,
-            total_steps,
-            media_id: &media_id,
-        };
-        emitter.emit(StepState::Started, &format!("Iniciando etapa '{}'", op.name()));
-    }
+    emitter.emit(StepState::Started, &format!("Iniciando processamento..."));
 
     // 2. Loop de leitura e streaming por chunks
     loop {

@@ -3,7 +3,7 @@ use tokio_stream::{Stream, StreamExt};
 use tonic::Status;
 
 use crate::shared::utils::event_bus::{self, MediaEvent};
-use super::proto::{ProgressResponse, UploadResponse};
+use super::proto::{ProgressResponse};
 
 pub type ProgressStream = std::pin::Pin<
     Box<dyn Stream<Item = Result<ProgressResponse, Status>> + Send + 'static>
@@ -21,20 +21,16 @@ pub fn create_progress_stream(target_media_id: String) -> ProgressStream {
                     id: media_id,
                     state,
                     message,
-                    final_result: None,
+                    is_success: None,
                     percentage,
                 }))
             }
-            MediaEvent::Completed { media_id, vault_path, total_bytes } if media_id == target_media_id => {
+            MediaEvent::Completed { media_id, total_bytes } if media_id == target_media_id => {
                 Some(Ok(ProgressResponse {
                     id: media_id.clone(),
                     state: "COMPLETED".to_string(),
                     message: format!("Processado com sucesso ({} bytes)", total_bytes),
-                    final_result: Some(UploadResponse {
-                        id: media_id,
-                        vault_path,
-                        success: true,
-                    }),
+                    is_success: Some(true),
                     percentage: 100.0,
                 }))
             }
@@ -43,7 +39,7 @@ pub fn create_progress_stream(target_media_id: String) -> ProgressStream {
                     id: media_id,
                     state: "FAILED".to_string(),
                     message: error,
-                    final_result: None,
+                    is_success: Some(false),
                     percentage: 0.0,
                 }))
             }

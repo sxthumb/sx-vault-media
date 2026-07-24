@@ -11,7 +11,6 @@ pub enum MediaEvent {
     },
     Completed {
         media_id: String,
-        vault_path: String,
         total_bytes: u64,
     },
     Failed {
