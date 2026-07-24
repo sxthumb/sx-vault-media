@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package media;
+
+service MediaService {
+    rpc UploadVideo (stream UploadChunkRequest) returns (stream ProgressResponse);
+}
+
+message UploadChunkRequest {
+    string id = 1;
+    bytes chunk_data = 2;
+    uint64 sequence_number = 3;
+}
+
+message ProgressResponse {
+    string id = 1;
+    string state = 2;
+    string message = 3;
+    optional UploadResponse final_result = 4;
+    float percentage = 5;
+}
+
+message UploadResponse {
+    string id = 1;
+    string vault_path = 2;
+    bool success = 3;
+}
