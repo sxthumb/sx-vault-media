@@ -18,12 +18,9 @@ pub async fn upload_video<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let extractor = extract_media_metadata();
-    let validator = validate_video_metadata(extractor.target());
-
     let pipe = StreamPipe::with_operators(vec![
-        Box::new(extractor),
-        Box::new(validator),
+        Box::new(extract_media_metadata()),
+        Box::new(validate_video_metadata()),
     ]);
 
     reactive_stream_pipe(reader, pipe, media_id).await
@@ -57,7 +54,7 @@ impl MediaProcessInbound for UploadVideoUseCase {
             .map_err(|err| DomainError::PipelineProcessingFailed(err.to_string()))?;
 
         Ok(MediaProcessResult {
-            media_id: command.media_id.clone(),
+            media_id: command.media_id,
             total_bytes_processed: total_bytes,
             is_success: true,
         })

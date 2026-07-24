@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use super::context::PipelineContext;
 use super::errors::PipelineError;
 
 #[derive(Debug, Clone)]
@@ -27,8 +28,7 @@ pub trait ProgressEmitter: Send + Sync {
 pub struct NoOpEmitter;
 
 impl ProgressEmitter for NoOpEmitter {
-    fn emit(&self, _state: StepState, _message: &str) {
-    }
+    fn emit(&self, _state: StepState, _message: &str) {}
 }
 
 #[async_trait]
@@ -38,12 +38,14 @@ pub trait StreamOperator: Send + Sync {
     async fn process(
         &mut self,
         chunk: Option<&[u8]>,
+        ctx: &mut PipelineContext,
         emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError>;
 
     async fn handle_error(
-        &mut self, 
+        &mut self,
         err: PipelineError,
+        _ctx: &mut PipelineContext,
         _emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
         Err(err)

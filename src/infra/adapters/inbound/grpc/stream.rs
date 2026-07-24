@@ -3,10 +3,10 @@ use tokio_stream::{Stream, StreamExt};
 use tonic::Status;
 
 use crate::shared::utils::event_bus::{self, MediaEvent};
-use super::proto::{ProgressResponse};
+use super::proto::ProgressResponse;
 
 pub type ProgressStream = std::pin::Pin<
-    Box<dyn Stream<Item = Result<ProgressResponse, Status>> + Send + 'static>
+    Box<dyn Stream<Item = Result<ProgressResponse, Status>> + Send + 'static>,
 >;
 
 pub fn create_progress_stream(target_media_id: String) -> ProgressStream {
@@ -14,6 +14,7 @@ pub fn create_progress_stream(target_media_id: String) -> ProgressStream {
 
     let stream = BroadcastStream::new(rx).filter_map(move |item| match item {
         Ok(event) => match event {
+            // Progresso incremental durante o processamento
             MediaEvent::Progress { media_id, state, message, percentage }
                 if media_id == target_media_id =>
             {
@@ -25,16 +26,27 @@ pub fn create_progress_stream(target_media_id: String) -> ProgressStream {
                     percentage,
                 }))
             }
-            MediaEvent::Completed { media_id, total_bytes } if media_id == target_media_id => {
+
+            // Processamento concluído com sucesso
+            MediaEvent::Completed { media_id, total_bytes }
+                if media_id == target_media_id =>
+            {
                 Some(Ok(ProgressResponse {
-                    id: media_id.clone(),
+                    id: media_id,
                     state: "COMPLETED".to_string(),
-                    message: format!("Processado com sucesso ({} bytes)", total_bytes),
+                    message: format!(
+                        "Processamento concluído com sucesso. Total de bytes: {}",
+                        total_bytes
+                    ),
                     is_success: Some(true),
                     percentage: 100.0,
                 }))
             }
-            MediaEvent::Failed { media_id, error } if media_id == target_media_id => {
+
+            // Falha durante o processamento
+            MediaEvent::Failed { media_id, error }
+                if media_id == target_media_id =>
+            {
                 Some(Ok(ProgressResponse {
                     id: media_id,
                     state: "FAILED".to_string(),
@@ -43,6 +55,7 @@ pub fn create_progress_stream(target_media_id: String) -> ProgressStream {
                     percentage: 0.0,
                 }))
             }
+
             _ => None,
         },
         Err(_) => None,

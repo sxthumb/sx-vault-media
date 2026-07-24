@@ -1,17 +1,20 @@
-use std::sync::{Arc, Mutex};
-
 use async_trait::async_trait;
 use super::traits::Validator;
+use crate::shared::utils::streaming::context::PipelineContext;
 use crate::shared::utils::streaming::errors::PipelineError;
 use crate::shared::utils::streaming::traits::{ProgressEmitter, StreamOperator};
 
+/// Validator genérico baseado em closure. Recebe um `Arc<Mutex<T>>` como fonte de dados,
+/// válido para usos onde o dado vem de fora do pipeline.
+/// Para dados originados dentro do pipeline, prefira implementar `StreamOperator` diretamente
+/// e ler do `PipelineContext`.
 pub struct FnValidator<T, F>
 where
     T: Send + Sync + 'static,
     F: Fn(&T) -> Result<(), PipelineError> + Send + Sync + 'static,
 {
     rule_name: &'static str,
-    target: Arc<Mutex<T>>,
+    target: std::sync::Arc<std::sync::Mutex<T>>,
     validate_fn: F,
 }
 
@@ -20,7 +23,11 @@ where
     T: Send + Sync + 'static,
     F: Fn(&T) -> Result<(), PipelineError> + Send + Sync + 'static,
 {
-    pub fn new(rule_name: &'static str, target: Arc<Mutex<T>>, validate_fn: F) -> Self {
+    pub fn new(
+        rule_name: &'static str,
+        target: std::sync::Arc<std::sync::Mutex<T>>,
+        validate_fn: F,
+    ) -> Self {
         Self {
             rule_name,
             target,
@@ -42,6 +49,7 @@ where
     async fn process(
         &mut self,
         chunk: Option<&[u8]>,
+        _ctx: &mut PipelineContext,
         _emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
         match chunk {

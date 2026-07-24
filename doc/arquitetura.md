@@ -217,3 +217,20 @@ Os próximos componentes naturais são:
 4. Tornar endereço, limites e caminhos configuráveis.
 5. Completar a extração de metadados e adicionar validações de domínio.
 6. Adicionar testes para a pipeline, adaptadores e contrato de progresso.
+
+## Evolução do Pipeline de Streaming: Padrão `PipelineContext`
+
+O pipeline de reatividade em `shared/utils` é o coração da aplicação. Inicialmente, o compartilhamento de metadados entre operadores (como `Extractor` e `Validator`) dependia de instâncias explícitas de `Arc<Mutex<T>>` passadas manualmente via construtores no *client code*.
+
+### Por que mudar?
+
+1. **Violação do Princípio da Responsabilidade Única (SRP) e Acoplamento:** O código cliente precisava ter conhecimento das dependências internas dos operadores (ex: `validate_video_metadata(extractor.target())`), acoplando a montagem do pipeline ao estado de runtime.
+2. **Evolução Fluida (Open/Closed Principle - OCP):** Para adicionar um novo operador que lê ou escreve dados acumulados (ex: métricas, auditoria, assinaturas), era necessário alterar a assinatura das funções de fábrica para passar novos `Arc<Mutex<T>>`.
+3. **Preservação de Funções Puras / Imutabilidade I/O:** Cada etapa/operador no pipeline deve agir de forma previsível e isolada. Ao receber um contexto dinâmico de execução (`PipelineContext`), o operador lê apenas a fração de dados que precisa para processar a entrada ($I$) e produzir a saída ($O$), sem causar efeitos colaterais fora do escopo do pipeline.
+
+### A Solução: PipelineContext
+
+Com a introdução do `PipelineContext` repassado dinamicamente pelo `reactive_stream_pipe`:
+- **Nenhum operador antigo quebra:** As traits abstratas (`Validator<T>`, `Extractor<T>`, `Transformer`, `Loader`) continuam sendo os contratos de domínio fortemente tipados.
+- **Contexto de Execução "Caixa Preta":** O pipeline gerencia o ciclo de vida dos dados acumulados durante o streaming.
+- **Composição Desacoplada:** Os operadores declarados no `StreamPipe` tornam-se completamente autônomos.

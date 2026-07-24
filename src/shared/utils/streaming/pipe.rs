@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use super::context::PipelineContext;
 use super::errors::PipelineError;
 use super::traits::{ProgressEmitter, StepState, StreamOperator};
 use crate::shared::utils::event_bus::{self, MediaEvent};
@@ -48,6 +49,7 @@ impl StreamOperator for StreamPipe {
     async fn process(
         &mut self,
         chunk: Option<&[u8]>,
+        ctx: &mut PipelineContext,
         emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
         match chunk {
@@ -55,10 +57,10 @@ impl StreamOperator for StreamPipe {
                 let mut current_data = Some(bytes.to_vec());
                 for op in self.operators.iter_mut() {
                     if let Some(ref input) = current_data {
-                        match op.process(Some(input), emitter).await {
+                        match op.process(Some(input), ctx, emitter).await {
                             Ok(output) => current_data = output,
                             Err(err) => {
-                                return op.handle_error(err, emitter).await;
+                                return op.handle_error(err, ctx, emitter).await;
                             }
                         }
                     } else {
@@ -69,8 +71,8 @@ impl StreamOperator for StreamPipe {
             }
             None => {
                 for op in self.operators.iter_mut() {
-                    if let Err(err) = op.process(None, emitter).await {
-                        return op.handle_error(err, emitter).await;
+                    if let Err(err) = op.process(None, ctx, emitter).await {
+                        return op.handle_error(err, ctx, emitter).await;
                     }
                 }
                 Ok(None)
@@ -81,10 +83,11 @@ impl StreamOperator for StreamPipe {
     async fn handle_error(
         &mut self,
         err: PipelineError,
+        ctx: &mut PipelineContext,
         emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
         for op in self.operators.iter_mut() {
-            if let Ok(res) = op.handle_error(err.clone(), emitter).await {
+            if let Ok(res) = op.handle_error(err.clone(), ctx, emitter).await {
                 return Ok(res);
             }
         }
@@ -125,18 +128,19 @@ where
     P: Into<StreamPipe>,
 {
     let mut pipe = pipe.into();
+    let mut ctx = PipelineContext::new();
     let total_steps = pipe.operators().len();
     let mut buffer = [0u8; 16384];
     let mut total_bytes_lidos: u64 = 0;
+
     let emitter = ContextualEmitter {
         step_index: 0,
         total_steps,
         media_id: &media_id,
     };
+    emitter.emit(StepState::Started, "Iniciando processamento...");
 
-    emitter.emit(StepState::Started, &format!("Iniciando processamento..."));
-
-    // 2. Loop de leitura e streaming por chunks
+    // Loop de leitura e streaming por chunks
     loop {
         let bytes_lidos = reader.read(&mut buffer).await?;
         if bytes_lidos == 0 {
@@ -154,10 +158,13 @@ where
             };
 
             if let Some(input) = current_data {
-                match op.process(Some(&input), &emitter).await {
+                match op.process(Some(&input), &mut ctx, &emitter).await {
                     Ok(output) => current_data = output,
                     Err(err) => {
-                        return op.handle_error(err, &emitter).await.map(|_| total_bytes_lidos);
+                        return op
+                            .handle_error(err, &mut ctx, &emitter)
+                            .await
+                            .map(|_| total_bytes_lidos);
                     }
                 }
             } else {
@@ -166,7 +173,7 @@ where
         }
     }
 
-    // 3. Flush final e encerramento dos operadores
+    // Flush final e encerramento dos operadores
     for (idx, op) in pipe.operators_mut().iter_mut().enumerate() {
         let emitter = ContextualEmitter {
             step_index: idx,
@@ -174,8 +181,11 @@ where
             media_id: &media_id,
         };
 
-        if let Err(err) = op.process(None, &emitter).await {
-            return op.handle_error(err, &emitter).await.map(|_| total_bytes_lidos);
+        if let Err(err) = op.process(None, &mut ctx, &emitter).await {
+            return op
+                .handle_error(err, &mut ctx, &emitter)
+                .await
+                .map(|_| total_bytes_lidos);
         }
 
         emitter.emit(

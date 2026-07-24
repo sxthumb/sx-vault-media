@@ -1,103 +1,32 @@
-use std::sync::{Arc, Mutex};
 use crate::core::domain::types::VideoMetadata;
-use crate::shared::utils::operators::builder::FnOperator;
-use crate::shared::utils::operators::extractor::FnExtractor;
-use crate::shared::utils::streaming::traits::{Extractor, StepState};
+use crate::shared::utils::streaming::context::PipelineContext;
+use crate::shared::utils::streaming::errors::PipelineError;
+use crate::shared::utils::streaming::traits::{ProgressEmitter, StepState, StreamOperator};
 
-#[derive(Debug, Clone)]
-pub struct MediaMetadataExtractorState {
-    pub target: Arc<Mutex<VideoMetadata>>,
-    pub header_buffer: Vec<u8>,
+/// Estado local do extrator — apenas o buffer de cabeçalho.
+/// O `VideoMetadata` acumulado vive no `PipelineContext` para que outros
+/// operadores posteriores na pipeline possam acessá-lo sem acoplamento direto.
+struct ExtractorState {
+    header_buffer: Vec<u8>,
 }
 
-impl Default for MediaMetadataExtractorState {
+impl Default for ExtractorState {
     fn default() -> Self {
         Self {
-            target: Arc::new(Mutex::new(VideoMetadata::default())),
             header_buffer: Vec::with_capacity(4096),
         }
     }
 }
 
 pub struct MediaMetadataExtractor {
-    inner: FnExtractor<MediaMetadataExtractorState>,
+    state: ExtractorState,
 }
 
 impl MediaMetadataExtractor {
     pub fn new() -> Self {
-        let op = FnOperator::with_state("extract_media_metadata", MediaMetadataExtractorState::default())
-            .do_it(move |chunk, state, emitter| {
-                let mut metadata = state.target.lock().map_err(|_| {
-                    crate::shared::utils::streaming::errors::PipelineError::OperatorFailed {
-                        operator_name: "extract_media_metadata",
-                        reason: "falha ao adquirir lock de metadados".to_string(),
-                    }
-                })?;
-
-                // Mantém a contagem de bytes acumulados do vídeo
-                metadata.add_bytes(chunk.len() as u64);
-
-                // Acumula os primeiros bytes para análise do cabeçalho (limitado a 4096 bytes)
-                if state.header_buffer.len() < 4096 {
-                    let needed = 4096 - state.header_buffer.len();
-                    let to_take = needed.min(chunk.len());
-                    state.header_buffer.extend_from_slice(&chunk[..to_take]);
-                }
-
-                // Tenta extrair o tipo usando 'infer' assim que tivermos dados e o tipo ainda não tiver sido definido.
-                // Esta checagem roda separadamente do acúmulo de buffer para evitar o bug de pulo de chunk.
-                if metadata.base.content_type.is_none() && !state.header_buffer.is_empty() {
-                    if let Some(kind) = infer::get(&state.header_buffer) {
-                        metadata.base.content_type = Some(kind.mime_type().to_string());
-
-                        emitter.emit(
-                            StepState::Processing,
-                            &format!("Container identificado: {}", kind.mime_type()),
-                        );
-                    }
-                }
-
-                Ok(())
-            })
-            .on_error(|err, _state, emitter| {
-                emitter.emit(
-                    StepState::Processing,
-                    &format!("Falha na extração de metadados: {}", err),
-                );
-                Err(err.clone())
-            })
-            .on_complete(move |state, emitter| {
-                let mut metadata = state.target.lock().map_err(|_| {
-                    crate::shared::utils::streaming::errors::PipelineError::OperatorFailed {
-                        operator_name: "extract_media_metadata",
-                        reason: "falha ao adquirir lock de metadados no flush".to_string(),
-                    }
-                })?;
-
-                // Se o 'infer' não identificou nada (ex: arquivo corrompido ou formato desconhecido)
-                if metadata.base.content_type.is_none() && !state.header_buffer.is_empty() {
-                    metadata.base.content_type = Some("application/octet-stream".to_string());
-                }
-
-                let mime = metadata.base.content_type.as_deref().unwrap_or("desconhecido");
-                emitter.emit(
-                    StepState::Completed,
-                    &format!("Metadados finalizados: {}", mime),
-                );
-                Ok(None)
-            });
-
         Self {
-            inner: FnExtractor::new(op),
+            state: ExtractorState::default(),
         }
-    }
-
-    pub fn target(&self) -> Arc<Mutex<VideoMetadata>> {
-        Arc::clone(&self.inner.state().target)
-    }
-
-    pub fn get_metadata(&self) -> VideoMetadata {
-        self.inner.state().target.lock().unwrap().clone()
     }
 }
 
@@ -108,34 +37,104 @@ impl Default for MediaMetadataExtractor {
 }
 
 #[async_trait::async_trait]
-impl crate::shared::utils::streaming::traits::StreamOperator for MediaMetadataExtractor {
+impl StreamOperator for MediaMetadataExtractor {
     fn name(&self) -> &'static str {
-        self.inner.name()
+        "extract_media_metadata"
     }
 
     async fn process(
         &mut self,
         chunk: Option<&[u8]>,
-        emitter: &dyn crate::shared::utils::streaming::traits::ProgressEmitter,
-    ) -> Result<Option<Vec<u8>>, crate::shared::utils::streaming::errors::PipelineError> {
-        self.inner.process(chunk, emitter).await
+        ctx: &mut PipelineContext,
+        emitter: &dyn ProgressEmitter,
+    ) -> Result<Option<Vec<u8>>, PipelineError> {
+        match chunk {
+            // ── Chunk recebido: acumular bytes e tentar inferir MIME ──────────
+            Some(bytes) => {
+                // Garante que VideoMetadata já exista no contexto
+                if ctx.get::<VideoMetadata>().is_none() {
+                    ctx.insert(VideoMetadata::default());
+                }
+
+                let metadata = ctx.get_mut::<VideoMetadata>().expect("inserido acima");
+
+                // Contagem total de bytes do vídeo
+                metadata.add_bytes(bytes.len() as u64);
+
+                // Acumula os primeiros bytes para análise do cabeçalho (máx. 4096 bytes)
+                if self.state.header_buffer.len() < 4096 {
+                    let needed = 4096 - self.state.header_buffer.len();
+                    let to_take = needed.min(bytes.len());
+                    self.state
+                        .header_buffer
+                        .extend_from_slice(&bytes[..to_take]);
+                }
+
+                // Tenta detectar o MIME type assim que tivermos dados suficientes
+                // e o tipo ainda não tiver sido identificado
+                if metadata.base.content_type.is_none()
+                    && !self.state.header_buffer.is_empty()
+                {
+                    if let Some(kind) = infer::get(&self.state.header_buffer) {
+                        metadata.base.content_type = Some(kind.mime_type().to_string());
+                        emitter.emit(
+                            StepState::Processing,
+                            &format!("Container identificado: {}", kind.mime_type()),
+                        );
+                    }
+                }
+
+                Ok(Some(bytes.to_vec()))
+            }
+
+            // ── Flush final: finalizar metadados no contexto ──────────────────
+            None => {
+                // Garante que o contexto tenha VideoMetadata mesmo para streams vazias
+                if ctx.get::<VideoMetadata>().is_none() {
+                    ctx.insert(VideoMetadata::default());
+                }
+
+                let metadata = ctx.get_mut::<VideoMetadata>().expect("inserido acima");
+
+                // Fallback quando o infer não reconheceu o formato
+                if metadata.base.content_type.is_none()
+                    && !self.state.header_buffer.is_empty()
+                {
+                    metadata.base.content_type =
+                        Some("application/octet-stream".to_string());
+                }
+
+                let mime = metadata
+                    .base
+                    .content_type
+                    .as_deref()
+                    .unwrap_or("desconhecido");
+
+                emitter.emit(
+                    StepState::Completed,
+                    &format!("Metadados finalizados: {}", mime),
+                );
+
+                Ok(None)
+            }
+        }
     }
 
     async fn handle_error(
         &mut self,
-        err: crate::shared::utils::streaming::errors::PipelineError,
-        emitter: &dyn crate::shared::utils::streaming::traits::ProgressEmitter,
-    ) -> Result<Option<Vec<u8>>, crate::shared::utils::streaming::errors::PipelineError> {
-        self.inner.handle_error(err, emitter).await
+        err: PipelineError,
+        _ctx: &mut PipelineContext,
+        emitter: &dyn ProgressEmitter,
+    ) -> Result<Option<Vec<u8>>, PipelineError> {
+        emitter.emit(
+            StepState::Processing,
+            &format!("Falha na extração de metadados: {}", err),
+        );
+        Err(err)
     }
 }
 
-impl Extractor<Arc<Mutex<VideoMetadata>>> for MediaMetadataExtractor {
-    fn extract(&self) -> &Arc<Mutex<VideoMetadata>> {
-        &self.inner.state().target
-    }
-}
-
+/// Fábrica — cria um `MediaMetadataExtractor` pronto para ser inserido na pipeline.
 pub fn extract_media_metadata() -> MediaMetadataExtractor {
     MediaMetadataExtractor::new()
 }

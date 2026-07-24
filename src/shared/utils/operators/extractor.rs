@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use super::builder::FnOperator;
+use crate::shared::utils::streaming::context::PipelineContext;
 use crate::shared::utils::streaming::errors::PipelineError;
 use crate::shared::utils::streaming::traits::{Extractor, ProgressEmitter, StreamOperator};
 
@@ -35,17 +36,19 @@ where
     async fn process(
         &mut self,
         chunk: Option<&[u8]>,
+        ctx: &mut PipelineContext,
         emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
-        self.inner.process(chunk, emitter).await
+        self.inner.process(chunk, ctx, emitter).await
     }
 
     async fn handle_error(
         &mut self,
         err: PipelineError,
+        ctx: &mut PipelineContext,
         emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
-        self.inner.handle_error(err, emitter).await
+        self.inner.handle_error(err, ctx, emitter).await
     }
 }
 
