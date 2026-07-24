@@ -4,12 +4,21 @@ use crate::shared::utils::streaming::errors::PipelineError;
 use crate::shared::utils::streaming::traits::{ProgressEmitter, StreamOperator};
 
 type NextFn<T> = Box<
-    dyn FnMut(&[u8], &mut T, &dyn ProgressEmitter) -> Result<Option<Vec<u8>>, PipelineError>
+    dyn FnMut(
+            &[u8],
+            &mut T,
+            &mut PipelineContext,
+            &dyn ProgressEmitter,
+        ) -> Result<Option<Vec<u8>>, PipelineError>
         + Send
         + Sync,
 >;
 type FlushFn<T> = Box<
-    dyn FnMut(&mut T, &dyn ProgressEmitter) -> Result<Option<Vec<u8>>, PipelineError>
+    dyn FnMut(
+            &mut T,
+            &mut PipelineContext,
+            &dyn ProgressEmitter,
+        ) -> Result<Option<Vec<u8>>, PipelineError>
         + Send
         + Sync,
 >;
@@ -17,6 +26,7 @@ type ErrorFn<T> = Box<
     dyn FnMut(
             &PipelineError,
             &mut T,
+            &mut PipelineContext,
             &dyn ProgressEmitter,
         ) -> Result<Option<Vec<u8>>, PipelineError>
         + Send
@@ -60,58 +70,62 @@ impl<T> FnOperator<T>
 where
     T: Send + Sync + 'static,
 {
+    /// Registra a closure para `on_next` com controle total sobre o chunk de saída.
     pub fn on_next<F>(mut self, mut f: F) -> Self
     where
-        F: FnMut(&[u8], &mut T, &dyn ProgressEmitter) -> Result<Option<Vec<u8>>, PipelineError>
+        F: FnMut(&[u8], &mut T, &mut PipelineContext, &dyn ProgressEmitter)
+                -> Result<Option<Vec<u8>>, PipelineError>
             + Send
             + Sync
             + 'static,
     {
-        self.on_next = Some(Box::new(move |chunk, state, emitter| {
-            f(chunk, state, emitter)
+        self.on_next = Some(Box::new(move |chunk, state, ctx, emitter| {
+            f(chunk, state, ctx, emitter)
         }));
         self
     }
 
-    /// Variante simplificada: a closure retorna `Result<(), _>` e o chunk é passado adiante automaticamente.
+    /// Pass-through automático: a closure retorna `Result<(), _>` e o chunk original
+    /// é repassado adiante. Ideal para Extractors que apenas lêem/inserem no ctx.
     pub fn do_it<F>(mut self, mut f: F) -> Self
     where
-        F: FnMut(&[u8], &mut T, &dyn ProgressEmitter) -> Result<(), PipelineError>
+        F: FnMut(&[u8], &mut T, &mut PipelineContext, &dyn ProgressEmitter)
+                -> Result<(), PipelineError>
             + Send
             + Sync
             + 'static,
     {
-        self.on_next = Some(Box::new(move |chunk, state, emitter| {
-            f(chunk, state, emitter)?;
+        self.on_next = Some(Box::new(move |chunk, state, ctx, emitter| {
+            f(chunk, state, ctx, emitter)?;
             Ok(Some(chunk.to_vec()))
         }));
         self
     }
 
+    /// Registra a closure para `on_complete` (flush final do stream).
     pub fn on_complete<F>(mut self, mut f: F) -> Self
     where
-        F: FnMut(&mut T, &dyn ProgressEmitter) -> Result<Option<Vec<u8>>, PipelineError>
+        F: FnMut(&mut T, &mut PipelineContext, &dyn ProgressEmitter)
+                -> Result<Option<Vec<u8>>, PipelineError>
             + Send
             + Sync
             + 'static,
     {
-        self.on_flush = Some(Box::new(move |state, emitter| f(state, emitter)));
+        self.on_flush = Some(Box::new(move |state, ctx, emitter| f(state, ctx, emitter)));
         self
     }
 
+    /// Registra a closure para `on_error` (circuit breaker).
     pub fn on_error<F>(mut self, mut f: F) -> Self
     where
-        F: FnMut(
-                &PipelineError,
-                &mut T,
-                &dyn ProgressEmitter,
-            ) -> Result<Option<Vec<u8>>, PipelineError>
+        F: FnMut(&PipelineError, &mut T, &mut PipelineContext, &dyn ProgressEmitter)
+                -> Result<Option<Vec<u8>>, PipelineError>
             + Send
             + Sync
             + 'static,
     {
-        self.on_error = Some(Box::new(move |err, state, emitter| {
-            f(err, state, emitter)
+        self.on_error = Some(Box::new(move |err, state, ctx, emitter| {
+            f(err, state, ctx, emitter)
         }));
         self
     }
@@ -126,25 +140,23 @@ where
         self.name
     }
 
-    /// O `PipelineContext` é recebido mas não repassado às closures — a API das closures
-    /// não muda. Operadores que precisam de ctx devem implementar `StreamOperator` diretamente.
     async fn process(
         &mut self,
         chunk: Option<&[u8]>,
-        _ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext,
         emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
         match chunk {
             Some(bytes) => {
                 if let Some(ref mut next_fn) = self.on_next {
-                    next_fn(bytes, &mut self.state, emitter)
+                    next_fn(bytes, &mut self.state, ctx, emitter)
                 } else {
                     Ok(Some(bytes.to_vec()))
                 }
             }
             None => {
                 if let Some(ref mut flush_fn) = self.on_flush {
-                    flush_fn(&mut self.state, emitter)
+                    flush_fn(&mut self.state, ctx, emitter)
                 } else {
                     Ok(None)
                 }
@@ -155,11 +167,11 @@ where
     async fn handle_error(
         &mut self,
         err: PipelineError,
-        _ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext,
         emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
         if let Some(ref mut error_fn) = self.on_error {
-            error_fn(&err, &mut self.state, emitter)
+            error_fn(&err, &mut self.state, ctx, emitter)
         } else {
             Err(err)
         }

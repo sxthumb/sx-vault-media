@@ -52,6 +52,3 @@ pub trait StreamOperator: Send + Sync {
     }
 }
 
-pub trait Extractor<T>: StreamOperator {
-    fn extract(&self) -> &T;
-}
