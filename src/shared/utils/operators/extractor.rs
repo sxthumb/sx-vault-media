@@ -17,6 +17,10 @@ where
     pub fn new(operator: FnOperator<T>) -> Self {
         Self { inner: operator }
     }
+
+    pub fn state(&self) -> &T {
+        &self.inner.state
+    }
 }
 
 #[async_trait]
