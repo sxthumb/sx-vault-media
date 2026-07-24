@@ -44,7 +44,7 @@ pub trait StreamOperator: Send + Sync {
     async fn handle_error(
         &mut self, 
         err: PipelineError,
-        emitter: &dyn ProgressEmitter,
+        _emitter: &dyn ProgressEmitter,
     ) -> Result<Option<Vec<u8>>, PipelineError> {
         Err(err)
     }

@@ -7,7 +7,7 @@ pub struct FnExtractor<T>
 where
     T: Send + Sync + 'static,
 {
-    inner: FnOperator<T>,
+    pub(crate) inner: FnOperator<T>,
 }
 
 impl<T> FnExtractor<T>
