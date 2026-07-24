@@ -1,41 +1,30 @@
 # SX Vault Media
 
-Serviço Rust para receber mídias por streaming gRPC, processar o conteúdo em
-chunks e publicar o progresso do processamento. O projeto é a base do
-serviço de armazenamento e análise de vídeos do ecossistema SX.
+Serviço Rust para receber mídias (áudio, imagem e vídeo) por streaming gRPC, processar o conteúdo em chunks sob consumo de memória constante $O(1)$ e publicar o progresso do processamento. O projeto serve como infraestrutura base de armazenamento e ingestão de mídias no ecossistema SX.
+
+---
+
+## Documentação Técnica
+- 📝 **[Arquitetura do Projeto](file:///e:/n2k6/projetos/sxthumb/sx-vault-media/doc/arquitetura.md)**: Detalhamento de camadas, fluxos gRPC e responsabilidades.
+- 📖 **[Wiki de Utilitários de Streaming (shared/utils)](file:///e:/n2k6/projetos/sxthumb/sx-vault-media/doc/shared_utils_wiki.md)**: Explicações da arquitetura reativa, ciclo de vida ETL (`extract_it`, `validate_it`, `transform_it`, `load_it`) e exemplos de criação de operadores.
+
+---
 
 ## O que o projeto faz hoje
 
 O fluxo implementado é:
 
-1. O cliente abre um upload bidirecional em streaming pelo método
-   `MediaService.UploadVideo`.
-2. O adaptador gRPC transforma cada `UploadChunkRequest` em um fluxo de bytes.
-3. Um identificador UUID é criado para a mídia e o caso de uso de upload é
-   executado de forma assíncrona.
-4. A pipeline lê o conteúdo em chunks de 16 KiB e executa os operadores
-   configurados.
-5. O operador atual acumula o tamanho recebido e tenta identificar contêineres
-   MP4, WebM e QuickTime a partir do cabeçalho.
-6. Eventos de progresso, conclusão ou falha são publicados em um barramento
-   interno e expostos ao cliente como `ProgressResponse`.
+1. O cliente abre um upload bidirecional em streaming pelo método `MediaService.UploadVideo`.
+2. O adaptador gRPC transforma cada `UploadChunkRequest` em um fluxo assíncrono de bytes.
+3. Um identificador UUID é criado para a mídia e o caso de uso de upload é executado de forma assíncrona.
+4. A pipeline reativa lê o conteúdo em chunks de 16 KiB e executa as etapas configuradas.
+5. O extrator (`extract_media_metadata`) acumula os bytes e tenta identificar contêineres de mídia (áudio, imagem ou vídeo) a partir do cabeçalho inicial dos dados, populando o `PipelineContext`.
+6. O validador (`validate_video_metadata`) lê o contexto e executa as regras de validação associadas.
+7. Eventos de progresso, conclusão ou falha são publicados em um barramento interno e expostos ao cliente como `ProgressResponse`.
 
-> A persistência definitiva no vault ainda não está implementada. O resultado
-> atual retorna um caminho calculado no formato
-> `/vault/storage/{media_id}`.
+> A persistência definitiva no vault físico ainda não está implementada. O resultado atual retorna um caminho fictício no formato `/vault/storage/{media_id}`.
 
-## Arquitetura
-
-O código segue uma separação inspirada em Arquitetura Hexagonal/Clean
-Architecture:
-
-- **Core**: domínio, portas, casos de uso e serviços de negócio.
-- **Infra**: adaptadores de entrada, runtime e configuração.
-- **Shared**: abstrações reutilizáveis para streaming, operadores, eventos e
-  conversão de streams gRPC.
-
-A descrição detalhada, o fluxo de execução, o contrato gRPC e o estado atual
-dos componentes estão em [`doc/arquitetura.md`](doc/arquitetura.md).
+---
 
 ## Estrutura do repositório
 
@@ -50,25 +39,22 @@ dos componentes estão em [`doc/arquitetura.md`](doc/arquitetura.md).
 │   ├── core/                   # Domínio e regras de negócio
 │   │   ├── domain/
 │   │   ├── ports/
-│   │   ├── services/
+│   │   ├── services/           # Serviços baseados nos helpers do FnOperator
 │   │   └── use_cases/
-│   ├── infra/                  # Integrações com o mundo externo
-│   │   ├── adapters/
-│   │   │   ├── inbound/grpc/
-│   │   │   └── outbound/
-│   │   ├── config/
-│   │   └── runtime/
-│   └── shared/                 # Componentes técnicos compartilhados
+│   ├── infra/                  # Adaptadores de Entrada/Saída, runtime e config
+│   │   └── adapters/
+│   └── shared/                 # Componentes técnicos utilitários
 │       └── utils/
 │           ├── event_bus.rs
 │           ├── grpc.rs
-│           ├── operators/
-│           ├── composition/        # Abstrações sobre valores processados
-└── streaming/
-├── Cargo.toml
+│           ├── streaming/      # Engine de pipeline, PipelineContext e erros
+│           └── operators/      # FnOperator e helpers ETL (extract_it, validate_it, etc.)
 └── doc/
-    └── arquitetura.md
+    ├── arquitetura.md          # Detalhamento de arquitetura
+    └── shared_utils_wiki.md    # Guia do desenvolvedor para a pipeline reativa
 ```
+
+---
 
 ## Tecnologias
 
@@ -77,53 +63,27 @@ dos componentes estão em [`doc/arquitetura.md`](doc/arquitetura.md).
 - Tonic, Prost e Protocol Buffers para gRPC
 - Serde para serialização dos tipos de domínio
 - `tokio::sync::broadcast` para eventos internos de progresso
+- `infer` para detecção de MIME types a partir do fluxo de bytes
 
-As abstrações reutilizáveis de composição estão em
-`src/shared/utils/composition/`:
-
-- `Validator<T>` valida um valor sem transformá-lo.
-- `Transformer<I, O>` transforma um valor em outro.
-- `Loader<I, O>` persiste ou publica um valor e retorna o resultado da operação.
+---
 
 ## Executando localmente
 
 Pré-requisitos:
-
 - Rust e Cargo instalados
 
 Para compilar:
-
 ```bash
 cargo check
 ```
 
-Para iniciar o servidor:
+Para rodar a suite de testes unitários:
+```bash
+cargo test
+```
 
+Para iniciar o servidor gRPC local:
 ```bash
 cargo run
 ```
-
 O servidor escuta, por padrão, em `[::1]:50051`.
-
-## Contrato gRPC
-
-O contrato fonte está em [`proto/media.proto`](proto/media.proto). O método
-disponível atualmente é:
-
-```text
-rpc UploadVideo (stream UploadChunkRequest)
-    returns (stream ProgressResponse)
-```
-
-O código Rust correspondente é gerado durante o build por `src/build.rs`; os
-artefatos gerados não devem ser editados manualmente.
-
-## Estado atual e próximos passos
-
-- A entrada gRPC e a pipeline de chunks estão conectadas.
-- A extração inicial de tipo de contêiner está implementada.
-- O barramento interno envia eventos de progresso e resultado.
-- O adaptador de saída e a gravação física no vault ainda são pontos de
-  extensão.
-- Validações de formato, checksum, metadados completos e configuração externa
-  ainda podem ser adicionados.
