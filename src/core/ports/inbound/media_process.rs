@@ -13,7 +13,6 @@ pub struct MediaProcessCommand {
 
 pub struct MediaProcessResult {
     pub media_id: String,
-    pub vault_path: String,
     pub total_bytes_processed: u64,
     pub is_success: bool,
 }

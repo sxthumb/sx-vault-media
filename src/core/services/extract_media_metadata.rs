@@ -34,31 +34,29 @@ impl MediaMetadataExtractor {
                     }
                 })?;
 
+                // Mantém a contagem de bytes acumulados do vídeo
                 metadata.add_bytes(chunk.len() as u64);
 
+                // Acumula os primeiros bytes para análise do cabeçalho (limitado a 4096 bytes)
                 if state.header_buffer.len() < 4096 {
                     let needed = 4096 - state.header_buffer.len();
                     let to_take = needed.min(chunk.len());
                     state.header_buffer.extend_from_slice(&chunk[..to_take]);
+                }
 
-                    if state.header_buffer.len() >= 12 && metadata.base.content_type.is_none() {
-                        let buffer = &state.header_buffer;
-                        if &buffer[4..8] == b"ftyp" {
-                            metadata.base.content_type = Some("video/mp4".to_string());
-                        } else if buffer.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
-                            metadata.base.content_type = Some("video/webm".to_string());
-                        } else if &buffer[4..8] == b"moov" || &buffer[4..8] == b"qt  " {
-                            metadata.base.content_type = Some("video/quicktime".to_string());
-                        }
+                // Tenta extrair o tipo usando 'infer' assim que tivermos dados e o tipo ainda não tiver sido definido.
+                // Esta checagem roda separadamente do acúmulo de buffer para evitar o bug de pulo de chunk.
+                if metadata.base.content_type.is_none() && !state.header_buffer.is_empty() {
+                    if let Some(kind) = infer::get(&state.header_buffer) {
+                        metadata.base.content_type = Some(kind.mime_type().to_string());
 
-                        if let Some(ref mime) = metadata.base.content_type {
-                            emitter.emit(
-                                StepState::Processing,
-                                &format!("Container identificado: {}", mime),
-                            );
-                        }
+                        emitter.emit(
+                            StepState::Processing,
+                            &format!("Container identificado: {}", kind.mime_type()),
+                        );
                     }
                 }
+
                 Ok(())
             })
             .on_error(|err, _state, emitter| {
@@ -76,6 +74,7 @@ impl MediaMetadataExtractor {
                     }
                 })?;
 
+                // Se o 'infer' não identificou nada (ex: arquivo corrompido ou formato desconhecido)
                 if metadata.base.content_type.is_none() && !state.header_buffer.is_empty() {
                     metadata.base.content_type = Some("application/octet-stream".to_string());
                 }

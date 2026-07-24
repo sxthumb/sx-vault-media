@@ -58,7 +58,6 @@ impl MediaProcessInbound for UploadVideoUseCase {
 
         Ok(MediaProcessResult {
             media_id: command.media_id.clone(),
-            vault_path: format!("/vault/storage/{}", command.media_id),
             total_bytes_processed: total_bytes,
             is_success: true,
         })

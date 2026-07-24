@@ -8,7 +8,12 @@ use crate::shared::utils::streaming::errors::PipelineError;
 const VIDEO_CONTENT_TYPES: &[&str] = &[
     "video/mp4",
     "video/webm",
-    "video/quicktime",
+    "video/quicktime",   // .mov (iPhones)
+    "video/x-matroska",  // .mkv
+    "video/x-msvideo",   // .avi
+    "video/x-flv",       // .flv
+    "video/ogg",         // .ogv / .ogg
+    "video/3gpp",        // .3gp
 ];
 
 pub fn validate_video_metadata(
@@ -18,28 +23,31 @@ pub fn validate_video_metadata(
         "validate_video_metadata",
         metadata,
         |metadata: &VideoMetadata| {
-        let content_type = metadata
-            .base
-            .content_type
-            .as_deref()
-            .ok_or_else(|| PipelineError::OperatorFailed {
-                operator_name: "validate_video_metadata",
-                reason: "tipo de conteúdo não detectado".to_string(),
-            })?;
+            // 1. Garante que o extractor conseguiu definir algum MIME type
+            let raw_content_type = metadata
+                .base
+                .content_type
+                .as_deref()
+                .ok_or_else(|| PipelineError::OperatorFailed {
+                    operator_name: "validate_video_metadata",
+                    reason: "tipo de conteúdo não detectado".to_string(),
+                })?;
 
-        if !VIDEO_CONTENT_TYPES.contains(&content_type) {
-            return Err(PipelineError::OperatorFailed {
-                operator_name: "validate_video_metadata",
-                reason: format!("conteúdo não é um vídeo aceito: {}", content_type),
-            });
-        }
+            let content_type = raw_content_type.trim().to_lowercase();
 
-        if metadata.base.total_size_bytes == 0 {
-            return Err(PipelineError::OperatorFailed {
-                operator_name: "validate_video_metadata",
-                reason: "vídeo sem conteúdo".to_string(),
-            });
-        }
+            if !VIDEO_CONTENT_TYPES.iter().any(|&allowed| allowed == content_type) {
+                return Err(PipelineError::OperatorFailed {
+                    operator_name: "validate_video_metadata",
+                    reason: format!("conteúdo não é um vídeo aceito: {}", content_type),
+                });
+            }
+
+            if metadata.base.total_size_bytes == 0 {
+                return Err(PipelineError::OperatorFailed {
+                    operator_name: "validate_video_metadata",
+                    reason: "vídeo sem conteúdo".to_string(),
+                });
+            }
 
             Ok(())
         },
