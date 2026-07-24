@@ -85,22 +85,6 @@ where
         self
     }
 
-    /// Pass-through automático: a closure retorna `Result<(), _>` e o chunk original
-    /// é repassado adiante. Ideal para Extractors que apenas lêem/inserem no ctx.
-    pub fn do_it<F>(mut self, mut f: F) -> Self
-    where
-        F: FnMut(&[u8], &mut T, &mut PipelineContext, &dyn ProgressEmitter)
-                -> Result<(), PipelineError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.on_next = Some(Box::new(move |chunk, state, ctx, emitter| {
-            f(chunk, state, ctx, emitter)?;
-            Ok(Some(chunk.to_vec()))
-        }));
-        self
-    }
 
     /// Registra a closure para `on_complete` (flush final do stream).
     pub fn on_complete<F>(mut self, mut f: F) -> Self
