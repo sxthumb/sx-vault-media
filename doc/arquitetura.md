@@ -132,10 +132,3 @@ service MediaService {
 Qualquer falha em operadores interrompe a pipeline e propaga o erro de forma graciosa.
 
 ---
-
-## 6. Evolução e Direções Futuras
-
-Os próximos componentes naturais são:
-1. Criar portas e adaptadores outbound de storage para persistir os arquivos no vault físico.
-2. Adicionar novos operadores para suporte completo de processamento de áudios e imagens (como geração de miniaturas e conversão de formato).
-3. Adicionar validação de ordenação e integridade dos chunks.
