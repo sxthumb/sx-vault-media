@@ -1,5 +1,7 @@
 # SX Vault Media
 
+⚠️ EM CONSTRUÇÃO — Esta biblioteca está sob desenvolvimento ativo.
+
 Serviço Rust para receber mídias (áudio, imagem e vídeo) por streaming gRPC, processar o conteúdo em chunks sob consumo de memória constante $O(1)$ e publicar o progresso do processamento. O projeto serve como infraestrutura base de armazenamento e ingestão de mídias no ecossistema SX.
 
 ---
